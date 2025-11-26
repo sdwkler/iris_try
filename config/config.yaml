@@ -6,11 +6,12 @@ save_every: 200
 device: auto
 
 env:
-  id: "ALE/Breakout-v5"
+  id: "ALE/Tetris-v5"
   frame_stack: 4
   image_size: [84, 84]
-  grayscale: false
+  grayscale: false   # true 可把帧设为灰度（channels=1）
   render_mode: null
+  atari_frame_skip: 4
 
 collector:
   frame_stack: 4
@@ -46,7 +47,7 @@ agent:
   max_grad_norm: 0.5
 
 training:
-  episodes: 2000
-  eval_every: 200
+  episodes: 200
+  eval_every: 20
   eval_episodes: 10
   max_steps_per_episode: 1000
