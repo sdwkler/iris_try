@@ -1,0 +1,22 @@
+torch --index-url https://download.pytorch.org/whl/cu128
+torchvision--index-url https://download.pytorch.org/whl/cu128
+torchaudio --index-url https://download.pytorch.org/whl/cu128
+python==3.10
+bitsandbytes
+pillow
+accelerate
+conda activate vlm
+transformers==4.46.2 
+datasets==2.21.0 
+huggingface_hub==0.24.7
+gymnasium 
+gymnasium[atari]==0.28.1
+scikit-image
+ale-py==0.11.2
+matplotlib
+opencv-python
+hydra-core
+wandb
+tqdm
+omegaconf==2.3.0
+#ale-import-roms --import-from-pkg atari_py.atari_roms
