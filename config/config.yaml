@@ -4,21 +4,17 @@ output_dir: outputs
 log_interval: 50
 save_every: 200
 device: auto
+
 env:
-  name: tetris
-  height: 20
-  width: 10
-  render_frame: true
-  frame_channels: 3
+  id: "ALE/Breakout-v5"
+  frame_stack: 4
   image_size: [84, 84]
+  grayscale: false
+  render_mode: null
 
 collector:
   frame_stack: 4
   max_episode_steps: 1000
-
-replay:
-  capacity: 50000
-  batch_size: 64
 
 visual:
   image_size: [84,84]
