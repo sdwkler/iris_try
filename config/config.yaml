@@ -1,43 +1,38 @@
-mode: train            # train / eval
+mode: train
 seed: 42
 output_dir: outputs
 log_interval: 50
 save_every: 200
-device: auto           # auto / cpu / cuda
-
-# 环境
+device: auto
 env:
   name: tetris
   height: 20
   width: 10
-  render_frame: true   # 把内部格子渲染为图像（用于视觉 encoder）
-  frame_channels: 3    # RGB渲染通道数
-  image_size: [84, 84] # H,W after resize for encoder
+  render_frame: true
+  frame_channels: 3
+  image_size: [84, 84]
 
-# 采集 / 状态表示
 collector:
-  num_workers: 1
-  frame_stack: 4       # 序列长度（Transformer 的 seq_len）
+  frame_stack: 4
   max_episode_steps: 1000
 
-# Replay / Dataset
 replay:
   capacity: 50000
-  min_size: 1000
   batch_size: 64
-  n_step: 1
 
-# 视觉 encoder
 visual:
-  type: cnn_encoder
-  image_size: [84, 84]
+  image_size: [84,84]
   cnn:
-    channels: [32, 64, 128]
+    channels: [32,64,128]
     kernel_sizes: [8,4,3]
     strides: [4,2,1]
     fc_dim: 256
+  vq:
+    num_embeddings: 512
+    embedding_dim: 64
+    commitment_cost: 0.25
+    decay: 0.99
 
-# Transformer / sequence model
 transformer:
   seq_len: 4
   d_model: 256
@@ -46,18 +41,14 @@ transformer:
   mlp_dim: 512
   dropout: 0.1
 
-# 策略 / Agent
 agent:
-  algorithm: dqn
-  hidden: 256
-  lr: 1e-4
+  algorithm: a2c
+  lr: 2.5e-4
   gamma: 0.99
-  eps_start: 1.0
-  eps_end: 0.05
-  eps_decay: 20000
-  update_target_every: 1000
+  value_coef: 0.5
+  entropy_coef: 0.01
+  max_grad_norm: 0.5
 
-# 训练
 training:
   episodes: 2000
   eval_every: 200
