@@ -22,7 +22,11 @@ try:
     import imageio
 except Exception:
     imageio = None
-
+import os
+import sys
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.insert(0, project_root)
 from collections import deque
 from src.envs.atari_env import AtariEnv
 from src.envs.tetris_env import TetrisEnv
@@ -104,7 +108,7 @@ def main():
     parser.add_argument("--fps", type=float, default=25.0)
     args = parser.parse_args()
 
-    with open(args.config, "r") as f:
+    with open(args.config, "r", encoding='utf-8') as f:
         cfg = yaml.safe_load(f)
 
     env, agent, seq_len, C, H, W = build_agent_and_env(cfg)

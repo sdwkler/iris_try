@@ -4,6 +4,11 @@ Quick environment smoke tests.
 Run: python tests/test_env.py
 """
 import yaml
+import os
+import sys
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.insert(0, project_root)
 from src.envs.atari_env import AtariEnv
 from src.envs.tetris_env import TetrisEnv
 
