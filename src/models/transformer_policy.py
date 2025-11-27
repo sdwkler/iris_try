@@ -1,27 +1,45 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=500):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len).unsqueeze(1).float()
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(torch.log(torch.tensor(10000.0)) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        seq_len = x.size(1)
+        return x + self.pe[:seq_len].unsqueeze(0)
 
 class TransformerPolicy(nn.Module):
-    def __init__(self, d_model=256, n_heads=4, num_layers=3, mlp_dim=512, seq_len=4, action_n=6, dropout=0.1):
+    def __init__(self, input_dim, action_n, d_model=256, n_heads=4, num_layers=3, mlp_dim=512, dropout=0.1, seq_len=4):
         super().__init__()
+        self.input_proj = nn.Linear(input_dim, d_model)
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_heads, dim_feedforward=mlp_dim, dropout=dropout, activation='relu')
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.pos_emb = nn.Parameter(torch.randn(seq_len, d_model) * 0.01)
-        self.action_head = nn.Sequential(
+        self.pos = PositionalEncoding(d_model, max_len=seq_len)
+        self.actor = nn.Sequential(
             nn.Linear(d_model, d_model//2),
             nn.ReLU(),
             nn.Linear(d_model//2, action_n)
         )
+        self.critic = nn.Sequential(
+            nn.Linear(d_model, d_model//2),
+            nn.ReLU(),
+            nn.Linear(d_model//2, 1)
+        )
 
     def forward(self, x):
-        # x: (B, seq_len, d_model)
-        # transformer expects (seq_len, B, d_model)
-        b, seq, d = x.shape
-        x = x + self.pos_emb.unsqueeze(0)  # broadcast
-        x = x.permute(1,0,2)
-        out = self.transformer(x)  # (seq_len, B, d_model)
-        out = out.permute(1,0,2)   # (B, seq_len, d_model)
-        feat = out[:, -1, :]       # use last token
-        q = self.action_head(feat)
-        return q
+        h = self.input_proj(x)
+        h = self.pos(h)
+        h = h.permute(1,0,2)
+        out = self.transformer(h)
+        out = out.permute(1,0,2)
+        last = out[:, -1, :]
+        logits = self.actor(last)
+        value = self.critic(last).squeeze(-1)
+        return logits, value

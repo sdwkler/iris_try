@@ -1,53 +1,68 @@
 mode: train
 seed: 42
 output_dir: outputs
-log_interval: 50
-save_every: 200
 device: auto
 
 env:
-  id: "ALE/Tetris-v5"
+  id: "ALE/MontezumaRevenge-v5"
+  num_envs: 8
   frame_stack: 4
   image_size: [84, 84]
-  grayscale: false   # true 可把帧设为灰度（channels=1）
-  render_mode: null
+  grayscale: false
   atari_frame_skip: 4
 
-collector:
-  frame_stack: 4
-  max_episode_steps: 1000
-
 visual:
+  pretrain: true
   image_size: [84,84]
-  cnn:
-    channels: [32,64,128]
-    kernel_sizes: [8,4,3]
-    strides: [4,2,1]
-    fc_dim: 256
+  channels: 3
   vq:
     num_embeddings: 512
     embedding_dim: 64
     commitment_cost: 0.25
     decay: 0.99
+  encoder:
+    hidden: 128
+  decoder:
+    hidden: 128
+  pretrain:
+    batch_size: 64
+    epochs: 10
+    lr: 1e-3
+
+rnd:
+  enabled: true
+  predictor_hidden: 256
+  target_hidden: 256
+  rnd_lr: 0.0001
+  rnd_scale: 1.0
 
 transformer:
   seq_len: 4
   d_model: 256
   n_heads: 4
-  num_layers: 3
+  num_layers: 4
   mlp_dim: 512
   dropout: 0.1
 
 agent:
-  algorithm: a2c
+  algorithm: ppo
   lr: 2.5e-4
   gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  epochs: 4
+  minibatch_size: 64
   value_coef: 0.5
   entropy_coef: 0.01
   max_grad_norm: 0.5
 
 training:
-  episodes: 200
-  eval_every: 20
-  eval_episodes: 10
-  max_steps_per_episode: 1000
+  total_updates: 1000
+  steps_per_env: 128
+  eval_every: 1000
+  eval_episodes: 5
+  save_every: 500
+
+logging:
+  save_video: true
+  video_dir: outputs/videos

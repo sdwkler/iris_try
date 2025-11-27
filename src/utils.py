@@ -14,11 +14,16 @@ def set_seed(seed):
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
+def get_device(device_option="auto"):
+    if device_option == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return device_option
+
 def save_plot(xs, ys, path, title="Training"):
     plt.figure()
     plt.plot(xs, ys)
-    plt.xlabel("Episode")
-    plt.ylabel("Reward")
+    plt.xlabel("Step")
+    plt.ylabel("Value")
     plt.title(title)
     plt.savefig(path)
     plt.close()
