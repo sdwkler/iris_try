@@ -1,10 +1,21 @@
-torch>=1.13.0
 numpy>=1.21
 tqdm>=4.64
 pyyaml>=6.0
 matplotlib>=3.5
 einops>=0.6.0
-gymnasium[accept-roms]>=0.28.1
+gymnasium[accept-roms]==0.28.1
 autorom>=0.4.2
 ale-py>=0.8.1
 opencv-python>=4.6
+torch --index-url https://download.pytorch.org/whl/cu128
+torchvision--index-url https://download.pytorch.org/whl/cu128
+torchaudio --index-url https://download.pytorch.org/whl/cu128
+bitsandbytes
+pillow
+accelerate
+scikit-image
+hydra-core
+wandb
+omegaconf==2.3.0
+# python -m src.main --config config/config.yaml
+# python -m src.tests --config config/config.yaml --model outputs/model_final.pth

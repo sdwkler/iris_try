@@ -17,6 +17,7 @@ def main():
     ensure_dir(cfg.get("logging", {}).get("video_dir", "outputs/videos"))
     set_seed(cfg.get("seed", 0))
     device = get_device(cfg.get("device","auto"))
+    print("Using device:", device)
     trainer = Trainer(cfg, device=device)
     mode = cfg.get("mode","train")
     if mode == "pretrain_vq":

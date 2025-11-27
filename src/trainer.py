@@ -14,14 +14,17 @@ from src.collector import RolloutBuffer
 from src.agent.ppo_agent import PPOAgent
 
 class Trainer:
-    def __init__(self, cfg, device='cpu'):
+    def __init__(self, cfg, device='cpu',mode='train'):
         self.cfg = cfg
         self.device = device
         self.output_dir = cfg.get("output_dir","outputs")
         ensure_dir(self.output_dir)
         env_cfg = cfg.get("env", {})
         self.env_id = env_cfg.get("id")
-        self.num_envs = env_cfg.get("num_envs", 8)
+        if mode == 'train':
+            self.num_envs = env_cfg.get("num_envs", 8)
+        else:
+            self.num_envs = env_cfg.get("eval_num_envs", 1)
         self.frame_stack = env_cfg.get("frame_stack", 4)
         self.image_size = tuple(env_cfg.get("image_size", [84,84]))
         self.grayscale = env_cfg.get("grayscale", True)
@@ -68,49 +71,59 @@ class Trainer:
 
     def frame_to_tensor(self, frame):
         """
-        Robustly convert a numpy `frame` to torch tensor shape (1, C, H, W), float32 in [0,1].
-        Accepts:
-          - frame: (H, W) grayscale
-          - frame: (H, W, C) color
-          - frame: (stack, H, W) stacked grayscale frames -> take last frame
-          - frame: (stack, H, W, C) stacked color frames -> take last frame
-        Returns: tensor on self.device
+        处理多环境/多帧输入，返回标准化张量
+        输入支持：(num_envs, T, H, W, C) 或单环境 (T, H, W, C)
+        返回：(num_envs, T, C, H, W) 张量
         """
-        arr = np.array(frame)
-        # If it's a stack (first dim equals frame_stack), take last frame
-        if arr.ndim == 3 and arr.shape[0] == self.frame_stack:
-            # shape (stack, H, W) -> pick last
-            arr = arr[-1]
-        if arr.ndim == 4 and arr.shape[0] == self.frame_stack:
-            # (stack, H, W, C)
-            arr = arr[-1]
-        # Now arr should be (H,W) or (H,W,C)
-        if arr.ndim == 2:
-            # grayscale -> (H,W) -> (H,W,1)
-            arr = arr[..., None]
-        # Ensure channels last
-        if arr.ndim != 3:
-            raise ValueError(f"Unexpected frame ndim after normalization: {arr.shape}")
-        H, W, C = arr.shape
-        # If channel-first already (rare), try to detect (C,H,W)
-        # But we assume arr is (H,W,C) here.
-        arr = arr.astype('float32') / 255.0
-        # Convert to (C,H,W)
-        arr = np.transpose(arr, (2,0,1)).copy()
-        t = torch.from_numpy(arr).unsqueeze(0).to(self.device)  # (1,C,H,W)
-        return t
+        # 转换为numpy数组（处理列表输入）
+        if isinstance(frame, list):
+            frame = np.stack([np.array(f, dtype=np.float32) for f in frame])
+        else:
+            frame = np.array(frame, dtype=np.float32)
+        
+        # 补全单环境输入的维度（增加num_envs维度）
+        if frame.ndim == 4:  # 单环境: (T, H, W, C) → 补为 (1, T, H, W, C)
+            frame = frame[np.newaxis, ...]
+        
+        # 检查最终维度是否符合预期
+        if frame.ndim != 5:
+            raise ValueError(f"输入帧必须为5维 (num_envs, T, H, W, C)，实际为 {frame.shape}")
+        
+        # 标准化：0-255 → 0-1（匹配预处理逻辑）
+        frame /= 255.0
+        
+        # 维度重排：(num_envs, T, H, W, C) → (num_envs, T, C, H, W)（适配PyTorch卷积输入）
+        frame = np.transpose(frame, (0, 1, 4, 2, 3))
+        
+        # 转换为tensor并移到设备
+        return torch.from_numpy(frame).to(self.device)
 
     def encode_frame(self, frame):
         """
-        Return pooled latent vector for one frame.
-        frame: numpy array (various shapes) -> converted with frame_to_tensor
-        returns: 1D numpy array of size embedding_dim
+        批量编码多环境多帧，返回每个环境的帧序列潜向量
+        输入：多环境多帧数组 (num_envs, T, H, W, C)
+        返回：(num_envs, T, D) numpy数组（D为编码器输出维度）
         """
-        ft = self.frame_to_tensor(frame)  # (1,C,H,W)
+        # 转换为tensor：(num_envs, T, C, H, W)
+        ft = self.frame_to_tensor(frame)
+        num_envs, T = ft.shape[0], ft.shape[1]
+        
+        # 批量编码所有帧（避免循环，提升效率）
+        # 重塑为 (num_envs*T, C, H, W) → 一次性编码
+        ft_flat = ft.reshape(-1, *ft.shape[2:])  # (num_envs*T, C, H, W)
+        
         with torch.no_grad():
-            z = self.encoder(ft)  # (1, D, h, w)
-            zpool = torch.mean(z, dim=[2,3]).squeeze(0)  # (D,)
+            z_flat = self.encoder(ft_flat)  # (num_envs*T, D, h, w)
+            # 全局平均池化 → (num_envs*T, D)
+            zpool_flat = torch.mean(z_flat, dim=[2, 3])
+        
+        # 恢复维度：(num_envs*T, D) → (num_envs, T, D)
+        zpool = zpool_flat.reshape(num_envs, T, -1)
+        
+        # 返回numpy数组（方便后续处理）
         return zpool.cpu().numpy()
+
+
 
     def pretrain_vq(self):
         print("Collecting frames and pretraining VQ-VAE...")
@@ -163,62 +176,86 @@ class Trainer:
 
     def collect_rollout(self):
         seq_len = self.cfg.get("transformer", {}).get("seq_len", 4)
-        per_env_seqs = [ [] for _ in range(self.num_envs) ]
-        obs = self.venv.reset()
-        # initialize per-env sequences (z vectors)
-        for i,e in enumerate(obs):
-            zpool = self.encode_frame(e)  # uses frame_to_tensor inside
-            for _ in range(seq_len):
-                per_env_seqs[i].append(zpool)
-        obs_roll, actions_roll, rewards_roll, dones_roll, logps_roll, values_roll = [], [], [], [], [], []
+        per_env_seqs = [[] for _ in range(self.num_envs)]  # 存储每个环境的潜向量序列
+        obs,info = self.venv.reset()  # 初始化环境观测
+        
+        # 初始化每个环境的序列（用初始帧的潜向量填充）
+        for i in range(self.num_envs):
+            # 提取单环境观测并处理可能的字典格式
+            e = obs[i]
+            # 编码单环境的多帧观测
+            zpool = self.encode_frame(e)  # 输出形状：(1, T, D)
+            init_z = zpool[0, -1]  # 取最后一帧的潜向量 (D,)
+            per_env_seqs[i] = [init_z for _ in range(seq_len)]  # 初始化序列
+        
+        # 重置rollout缓冲区
+        self.rollout = RolloutBuffer(
+            self.steps_per_env, 
+            self.num_envs, 
+            obs_shape=(seq_len, self.encoder.net[-1].out_channels)  # 适配Transformer输入形状
+        )
+        
+        # 收集rollout数据
         for step in range(self.steps_per_env):
-            # build batch obs of shape (N, seq_len, D)
-            obs_batch = np.stack([np.stack(per_env_seqs[i][-seq_len:]) for i in range(self.num_envs)])
-            obs_tensor = torch.FloatTensor(obs_batch).to(self.device)
-            logits, values = self.policy(obs_tensor)
-            probs = torch.softmax(logits, dim=-1)
-            dist = torch.distributions.Categorical(probs)
-            actions = dist.sample().cpu().numpy()
-            logps = dist.log_prob(torch.tensor(actions)).cpu().numpy()
-            values_np = values.cpu().numpy()
-            next_obs, rews, terms, infos = self.venv.step(actions.tolist())
-            # compute intrinsic reward
-            if self.rnd is not None:
-                zlist = []
-                for e in next_obs:
-                    zpool = self.encode_frame(e)
-                    zlist.append(zpool)
-                zbatch = torch.FloatTensor(np.stack(zlist)).to(self.device)
-                intrinsic = self.rnd.compute_intrinsic(zbatch).cpu().numpy() * self.cfg.get("rnd",{}).get("rnd_scale",1.0)
-            else:
-                intrinsic = np.zeros_like(rews)
-            total_rew = rews + intrinsic
-            # update per_env_seqs with new latents
+            # 准备当前步骤的观测序列（转为tensor输入策略网络）
+            obs_seq = np.array(per_env_seqs)  # 形状：(num_envs, seq_len, D)
+            obs_seq_tensor = torch.FloatTensor(obs_seq).to(self.device)
+            
+            # 获取动作、对数概率和价值
+            actions, logps, values = self.agent.get_action_and_value(obs_seq_tensor)
+            
+            # 执行环境步骤
+            next_obs, rewards, terms, truncs, infos = self.venv.step(actions)
+            dones = np.logical_or(terms, truncs)  # 合并终止和截断标志
+            
+            # 处理下一观测的格式
+            if isinstance(next_obs, dict):
+                next_obs = next_obs.get('observation', next_obs)
+            
+            # 编码下一观测并更新序列
             for i in range(self.num_envs):
-                zpool = self.encode_frame(next_obs[i])
-                per_env_seqs[i].append(zpool)
-            obs_roll.append(obs_batch)
-            actions_roll.append(actions)
-            rewards_roll.append(total_rew)
-            dones_roll.append(np.array(terms, dtype=np.float32))
-            logps_roll.append(logps)
-            values_roll.append(values_np)
-        obs_roll = np.stack(obs_roll)
-        actions_roll = np.stack(actions_roll)
-        rewards_roll = np.stack(rewards_roll)
-        dones_roll = np.stack(dones_roll)
-        logps_roll = np.stack(logps_roll)
-        values_roll = np.stack(values_roll)
-        last_obs_batch = np.stack([np.stack(per_env_seqs[i][-seq_len:]) for i in range(self.num_envs)])
-        last_obs_t = torch.FloatTensor(last_obs_batch).to(self.device)
-        _, last_values = self.policy(last_obs_t)
-        last_values = last_values.cpu().numpy()
-        return obs_roll, actions_roll, rewards_roll, dones_roll, logps_roll, values_roll, last_values
+                # 处理单环境下一观测的格式
+                e_next = next_obs[i]
+                if isinstance(e_next, dict):
+                    e_next = e_next.get('observation', e_next)
+                
+                # 编码新帧并更新序列（滑动窗口）
+                zpool_next = self.encode_frame(e_next)  # (1, T, D)
+                new_z = zpool_next[0, -1]  # 最新帧的潜向量
+                per_env_seqs[i].append(new_z)  # 追加新向量
+                per_env_seqs[i].pop(0)  # 移除最旧向量
+            
+            # 将当前步骤数据插入缓冲区
+            self.rollout.insert(
+                step,
+                obs=obs_seq,  # 存储当前序列作为观测
+                action=actions,
+                reward=rewards,
+                done=dones,
+                logp=logps,
+                value=values
+            )
+            
+            # 更新当前观测为下一观测（用于下一轮循环）
+            obs = next_obs
+        
+        # 获取最终价值（用于GAE计算）
+        final_obs_seq = np.array(per_env_seqs)
+        final_obs_tensor = torch.FloatTensor(final_obs_seq).to(self.device)
+        with torch.no_grad():
+            _, final_values = self.policy(final_obs_tensor)
+        final_values = final_values.cpu().numpy()
+        return self.rollout.get(), final_values
+    #self.obs_buf, self.actions, self.rewards, self.dones, self.logps, self.values
+
+
 
     def train(self):
         total_updates = self.total_updates
-        for update in range(total_updates):
-            obs_roll, actions, rewards, dones, logps, values, last_values = self.collect_rollout()
+        # 使用 trange 替换 range，添加进度条
+        for update in trange(total_updates, desc="Training", unit="update"):
+            rpllout_get, last_values = self.collect_rollout()
+            obs_roll, actions, rewards, dones, logps, values = rpllout_get
             advantages, returns = self.agent.compute_gae(rewards, values, dones, last_values)
             T, N = actions.shape
             seq_len = self.cfg.get("transformer", {}).get("seq_len", 4)

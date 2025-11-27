@@ -66,3 +66,7 @@ training:
 logging:
   save_video: true
   video_dir: outputs/videos
+
+eval:
+  num_envs: 1
+  episodes: 5
