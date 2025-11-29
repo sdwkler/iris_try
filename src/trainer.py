@@ -176,59 +176,57 @@ class Trainer:
 
     def collect_rollout(self):
         seq_len = self.cfg.get("transformer", {}).get("seq_len", 4)
-        per_env_seqs = [[] for _ in range(self.num_envs)]  # 存储每个环境的潜向量序列
-        obs,info = self.venv.reset()  # 初始化环境观测
+        obs, info = self.venv.reset()  # 初始化环境观测
         
-        # 初始化每个环境的序列（用初始帧的潜向量填充）
-        for i in range(self.num_envs):
-            # 提取单环境观测并处理可能的字典格式
-            e = obs[i]
-            # 编码单环境的多帧观测
-            zpool = self.encode_frame(e)  # 输出形状：(1, T, D)
-            init_z = zpool[0, -1]  # 取最后一帧的潜向量 (D,)
-            per_env_seqs[i] = [init_z for _ in range(seq_len)]  # 初始化序列
+        # ========== 优化1：批量初始化所有环境的序列 ==========
+        # 批量编码初始观测：(num_envs, T, H, W, C) → (num_envs, T, D)
+        # 处理可能的字典格式
+        if isinstance(obs, dict):
+            obs = obs.get('observation', obs)
+        # 批量编码所有环境的初始观测
+        zpool_init = self.encode_frame(obs)  # (num_envs, T, D)
+        # 取每个环境最后一帧的潜向量，重复seq_len次初始化序列
+        init_z = zpool_init[:, -1, :]  # (num_envs, D)
+        per_env_seqs = np.repeat(init_z[:, None, :], seq_len, axis=1)  # (num_envs, seq_len, D)
         
         # 重置rollout缓冲区
         self.rollout = RolloutBuffer(
             self.steps_per_env, 
             self.num_envs, 
-            obs_shape=(seq_len, self.encoder.net[-1].out_channels)  # 适配Transformer输入形状
+            obs_shape=(seq_len, self.encoder.net[-1].out_channels)
         )
         
         # 收集rollout数据
         for step in range(self.steps_per_env):
             # 准备当前步骤的观测序列（转为tensor输入策略网络）
-            obs_seq = np.array(per_env_seqs)  # 形状：(num_envs, seq_len, D)
-            obs_seq_tensor = torch.FloatTensor(obs_seq).to(self.device)
+            obs_seq_tensor = torch.FloatTensor(per_env_seqs).to(self.device)
             
             # 获取动作、对数概率和价值
             actions, logps, values = self.agent.get_action_and_value(obs_seq_tensor)
             
             # 执行环境步骤
             next_obs, rewards, terms, truncs, infos = self.venv.step(actions)
-            dones = np.logical_or(terms, truncs)  # 合并终止和截断标志
+            dones = np.logical_or(terms, truncs)
             
-            # 处理下一观测的格式
+            # ========== 优化2：批量处理next_obs并编码 ==========
+            # 统一处理next_obs格式（字典/数组）
             if isinstance(next_obs, dict):
                 next_obs = next_obs.get('observation', next_obs)
+            # 批量编码所有环境的next_obs → (num_envs, T, D)
+            zpool_next = self.encode_frame(next_obs)  # 一次性编码所有环境，无循环
+            new_z = zpool_next[:, -1, :]  # 所有环境的最新帧潜向量 (num_envs, D)
             
-            # 编码下一观测并更新序列
-            for i in range(self.num_envs):
-                # 处理单环境下一观测的格式
-                e_next = next_obs[i]
-                if isinstance(e_next, dict):
-                    e_next = e_next.get('observation', e_next)
-                
-                # 编码新帧并更新序列（滑动窗口）
-                zpool_next = self.encode_frame(e_next)  # (1, T, D)
-                new_z = zpool_next[0, -1]  # 最新帧的潜向量
-                per_env_seqs[i].append(new_z)  # 追加新向量
-                per_env_seqs[i].pop(0)  # 移除最旧向量
+            # ========== 优化3：向量化滑动窗口更新序列 ==========
+            # 替换append/pop：(num_envs, seq_len, D) → 滑动窗口保留后seq_len-1个，追加新z
+            per_env_seqs = np.concatenate([
+                per_env_seqs[:, 1:, :],  # 移除最旧的一列 (num_envs, seq_len-1, D)
+                new_z[:, None, :]        # 追加新向量 (num_envs, 1, D)
+            ], axis=1)
             
-            # 将当前步骤数据插入缓冲区
+            # ========== 插入缓冲区（无修改） ==========
             self.rollout.insert(
                 step,
-                obs=obs_seq,  # 存储当前序列作为观测
+                obs=per_env_seqs.copy(),  # 当前序列作为观测
                 action=actions,
                 reward=rewards,
                 done=dones,
@@ -236,17 +234,16 @@ class Trainer:
                 value=values
             )
             
-            # 更新当前观测为下一观测（用于下一轮循环）
+            # 更新当前观测
             obs = next_obs
         
-        # 获取最终价值（用于GAE计算）
-        final_obs_seq = np.array(per_env_seqs)
-        final_obs_tensor = torch.FloatTensor(final_obs_seq).to(self.device)
+        # 获取最终价值
+        final_obs_tensor = torch.FloatTensor(per_env_seqs).to(self.device)
         with torch.no_grad():
             _, final_values = self.policy(final_obs_tensor)
         final_values = final_values.cpu().numpy()
         return self.rollout.get(), final_values
-    #self.obs_buf, self.actions, self.rewards, self.dones, self.logps, self.values
+
 
 
 
