@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
+from torch.amp import GradScaler, autocast  # 修正导入路径
 
 class PPOAgent:
     def __init__(self, encoder, policy, cfg, device='cpu'):
@@ -18,9 +19,13 @@ class PPOAgent:
         self.max_grad_norm = cfg.get("max_grad_norm", 0.5)
         self.epochs = cfg.get("epochs", 4)
         self.minibatch_size = cfg.get("minibatch_size", 64)
+        
+        # 修正 GradScaler 初始化（显式指定设备类型和正确参数）
+        self.scaler = GradScaler(device=device) if device == 'cuda' else None
 
     def get_action_and_value(self, obs_seq):
-        with torch.no_grad():
+        # 修正 autocast 上下文管理器
+        with torch.no_grad(), autocast(device_type=self.device, enabled=self.scaler is not None):
             logits, value = self.policy(obs_seq)
             probs = torch.softmax(logits, dim=-1)
             dist = torch.distributions.Categorical(probs)
@@ -51,6 +56,7 @@ class PPOAgent:
         returns_t = torch.FloatTensor(returns).to(self.device)
         advs = torch.FloatTensor(advantages).to(self.device)
         dataset_size = obs_t.shape[0]
+        
         for epoch in range(self.epochs):
             idxs = np.arange(dataset_size)
             np.random.shuffle(idxs)
@@ -61,18 +67,38 @@ class PPOAgent:
                 mb_old_logps = old_logps_t[mb_idx]
                 mb_returns = returns_t[mb_idx]
                 mb_advs = advs[mb_idx]
-                logits, values = self.policy(mb_obs)
-                probs = torch.softmax(logits, dim=-1)
-                dist = torch.distributions.Categorical(probs)
-                mb_logps = dist.log_prob(mb_actions)
-                ratio = torch.exp(mb_logps - mb_old_logps)
-                surr1 = ratio * mb_advs
-                surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * mb_advs
-                policy_loss = -torch.min(surr1, surr2).mean()
-                value_loss = (mb_returns - values).pow(2).mean()
-                entropy = dist.entropy().mean()
-                loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy
+                
+                # 修正 autocast 上下文管理器
+                with autocast(device_type=self.device, enabled=self.scaler is not None):
+                    logits, values = self.policy(mb_obs)
+                    probs = torch.softmax(logits, dim=-1)
+                    dist = torch.distributions.Categorical(probs)
+                    mb_logps = dist.log_prob(mb_actions)
+                    ratio = torch.exp(mb_logps - mb_old_logps)
+                    surr1 = ratio * mb_advs
+                    surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * mb_advs
+                    policy_loss = -torch.min(surr1, surr2).mean()
+                    value_loss = (mb_returns - values).pow(2).mean()
+                    entropy = dist.entropy().mean()
+                    loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy
+                
+                # 修正梯度缩放逻辑
                 self.opt.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(list(self.encoder.parameters()) + list(self.policy.parameters()), self.max_grad_norm)
-                self.opt.step()
+                if self.scaler is not None:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.unscale_(self.opt)  # 为梯度裁剪准备
+                else:
+                    loss.backward()
+                
+                # 梯度裁剪
+                nn.utils.clip_grad_norm_(
+                    list(self.encoder.parameters()) + list(self.policy.parameters()),
+                    self.max_grad_norm
+                )
+                
+                # 优化器步骤
+                if self.scaler is not None:
+                    self.scaler.step(self.opt)
+                    self.scaler.update()
+                else:
+                    self.opt.step()

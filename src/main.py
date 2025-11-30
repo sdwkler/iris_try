@@ -20,9 +20,7 @@ def main():
     print("Using device:", device)
     trainer = Trainer(cfg, device=device)
     mode = cfg.get("mode","train")
-    if mode == "pretrain_vq":
-        trainer.pretrain_vq()
-    elif mode == "train":
+    if mode == "train":
         trainer.train()
     elif mode == "eval":
         trainer.evaluate(episodes=cfg.get("logging", {}).get("eval_episodes", 5))

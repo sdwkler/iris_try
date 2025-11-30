@@ -7,13 +7,13 @@ env:
   id: "ALE/MontezumaRevenge-v5"
   num_envs: 8
   frame_stack: 4
-  image_size: [84, 84]
+  image_size: [84,84]
   grayscale: false
   atari_frame_skip: 4
 
 visual:
-  pretrain: true
-  image_size: [84,84]
+  dino_model: dinov2_vits14
+  image_size: [224, 224]
   channels: 3
   vq:
     num_embeddings: 512
@@ -34,15 +34,15 @@ rnd:
   predictor_hidden: 256
   target_hidden: 256
   rnd_lr: 0.0001
-  rnd_scale: 1.0
+  rnd_scale: 2.0
 
 transformer:
   seq_len: 4
   d_model: 256
-  n_heads: 4
-  num_layers: 4
+  n_heads: 2
+  num_layers: 2
   mlp_dim: 512
-  dropout: 0.1
+  dropout: 0.2
 
 agent:
   algorithm: ppo
@@ -57,11 +57,11 @@ agent:
   max_grad_norm: 0.5
 
 training:
-  total_updates: 1000
+  total_updates: 100
   steps_per_env: 128
-  eval_every: 1000
+  eval_every: 20
   eval_episodes: 5
-  save_every: 500
+  save_every: 20
 
 logging:
   save_video: true
