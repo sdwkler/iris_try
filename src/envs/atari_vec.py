@@ -4,17 +4,15 @@ import numpy as np
 import cv2
 
 def make_atari_env(env_id, seed=None, idx=0, image_size=(84,84), frame_stack=4, grayscale=True, atari_frame_skip=4, render_mode=None):
-    def _thunk():
-        make_kwargs = {}
-        if render_mode is not None:
-            make_kwargs["render_mode"] = render_mode
-        # disable env-level frameskip
-        make_kwargs["frameskip"] = 1
-        env = gym.make(env_id, **make_kwargs)
-        env = AtariPreprocessing(env, frame_skip=atari_frame_skip, grayscale_obs=grayscale, scale_obs=False)
-        env = FrameStack(env, num_stack=frame_stack)
-        return AtariResizeWrapper(env, image_size)
-    return _thunk
+    make_kwargs = {}
+    if render_mode is not None:
+        make_kwargs["render_mode"] = render_mode
+    # disable env-level frameskip
+    make_kwargs["frameskip"] = 1
+    env = gym.make(env_id, **make_kwargs)
+    env = AtariPreprocessing(env, frame_skip=atari_frame_skip, grayscale_obs=grayscale, scale_obs=False)
+    env = FrameStack(env, num_stack=frame_stack)
+    return AtariResizeWrapper(env, image_size)
 
 class AtariResizeWrapper(gym.Wrapper):
     def __init__(self, env, image_size=(84,84)):

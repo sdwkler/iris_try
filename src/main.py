@@ -11,7 +11,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    with open(args.config, "r") as f:
+    with open(args.config, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     ensure_dir(cfg.get("output_dir","outputs"))
     ensure_dir(cfg.get("logging", {}).get("video_dir", "outputs/videos"))

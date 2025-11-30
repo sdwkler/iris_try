@@ -3,70 +3,75 @@ seed: 42
 output_dir: outputs
 device: auto
 
+vqvae:
+  model:
+    channel: 128
+    n_res_block: 2
+    n_res_channel: 64
+    embed_dim: 128
+    n_embed: 512
+  checkpoint_path: "vqvae_checkpoint.pth"
+
 env:
   id: "ALE/MontezumaRevenge-v5"
   num_envs: 8
   frame_stack: 4
   image_size: [84,84]
-  grayscale: false
+  grayscale: true
   atari_frame_skip: 4
-
-visual:
-  dino_model: dinov2_vits14
-  image_size: [224, 224]
-  channels: 3
-  vq:
-    num_embeddings: 512
-    embedding_dim: 64
-    commitment_cost: 0.25
-    decay: 0.99
-  encoder:
-    hidden: 128
-  decoder:
-    hidden: 128
-  pretrain:
-    batch_size: 64
-    epochs: 10
-    lr: 1e-3
+  # 关键：延长单局最大步数（适配1000+步）
+  max_episode_steps: 1000  # 显式指定单局最大步数
+  full_action_space: false
+  repeat_action_probability: 0.0
 
 rnd:
   enabled: true
   predictor_hidden: 256
   target_hidden: 256
   rnd_lr: 0.0001
-  rnd_scale: 2.0
+  rnd_scale: 5.0  # 放大内在奖励，驱动长序列探索
+  rnd_max_grad_norm: 0.5
 
 transformer:
   seq_len: 4
   d_model: 256
   n_heads: 2
-  num_layers: 2
+  num_layers: 3  # 增加1层，提升长序列建模能力
   mlp_dim: 512
-  dropout: 0.2
+  dropout: 0.15  # 降低dropout，保留长序列信息
+  exploration_noise: 0.1  # 降低探索噪声，保证行为连贯性
+  action_perturb_prob: 0.1  # 降低随机动作概率（10%）
 
 agent:
   algorithm: ppo
-  lr: 2.5e-4
-  gamma: 0.99
-  gae_lambda: 0.95
-  clip_eps: 0.2
-  epochs: 4
-  minibatch_size: 64
-  value_coef: 0.5
-  entropy_coef: 0.01
+  lr: 1e-4  # 更低学习率，适配长序列训练
+  gamma: 0.995  # 关键：提升gamma，减少远期奖励衰减（0.995^1000≈0.0067，0.99^1000≈0.00004）
+  gae_lambda: 0.97  # 提升lambda，更准确估计长序列优势
+  clip_eps: 0.1  # 缩小clip范围，提升长序列策略稳定性
+  epochs: 8  # 增加更新轮数，充分拟合长序列数据
+  minibatch_size: 128  # 增大批次，提升长序列数据的统计有效性
+  value_coef: 0.7  # 提升值函数权重，更好拟合长序列奖励
+  entropy_coef: 0.08  # 保持熵奖励，避免过早收敛
   max_grad_norm: 0.5
+  weight_decay: 1e-4
+  max_train_steps: 500  # 适配总训练轮数
 
 training:
-  total_updates: 100
-  steps_per_env: 128
-  eval_every: 20
+  total_updates: 500  # 从100→5000（正式训练建议10000+）
+  steps_per_env: 512  # 从64→256（单轮收集更多步数，接近单局1000步的1/4）
+  eval_every: 50  # 每100轮评估，避免频繁评估影响训练
   eval_episodes: 5
-  save_every: 20
+  save_every: 100  # 每500轮保存，聚焦长周期训练
+  use_random_actions_for_n_steps: 5000  # 延长初始随机探索（10000步）
+  grad_accumulation_steps: 2  # 梯度累积，等效增大批次
 
 logging:
   save_video: true
   video_dir: outputs/videos
+  log_every: 10  # 每10轮打印日志，监控长周期趋势
 
 eval:
   num_envs: 1
   episodes: 5
+  eval_exploration_noise: 0.0
+  eval_action_perturb_prob: 0.0
